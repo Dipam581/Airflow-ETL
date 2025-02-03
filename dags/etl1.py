@@ -3,6 +3,10 @@ from airflow.providers.http.hooks.http import HttpHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.decorators import task
 from airflow.utils.dates import days_ago
+
+from airflow.operators.python_operator import PythonOperator
+from airflow.providers.snowflake.operators.snowflake import SnowflakeOperator
+
 import requests
 import json
 
@@ -10,7 +14,9 @@ import json
 LATITUDE = '51.5074'
 LONGITUDE = '-0.1278'
 POSTGRES_CONN_ID='postgres_default'
-API_CONN_ID='open_meteo_api'
+
+api_key= '45VI4ZOVBTB4TK0S'
+
 
 default_args={
     'owner':'airflow',
@@ -18,25 +24,19 @@ default_args={
 }
 
 ## DAG
-with DAG(dag_id='weather_etl_pipeline',
+with DAG(dag_id='Stock_etl_pipeline',
          default_args=default_args,
          schedule_interval='@daily',
          catchup=False) as dags:
     
     @task()
-    def extract_weather_data():
+    def extract_stock_data():
         """Extract weather data from Open-Meteo API using Airflow Connection."""
 
         # Use HTTP Hook to get connection details from Airflow connection
 
-        http_hook=HttpHook(http_conn_id=API_CONN_ID,method='GET')
-
-        ## Build the API endpoint
-        ## https://api.open-meteo.com/v1/forecast?latitude=51.5074&longitude=-0.1278&current_weather=true
-        endpoint=f'/v1/forecast?latitude={LATITUDE}&longitude={LONGITUDE}&current_weather=true'
-
-        ## Make the request via the HTTP Hook
-        response=http_hook.run(endpoint)
+        url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=RELIANCE.BSE&outputsize=full&apikey={api_key}'
+        response = requests.get(url)
 
         if response.status_code == 200:
             return response.json()
@@ -44,18 +44,18 @@ with DAG(dag_id='weather_etl_pipeline',
             raise Exception(f"Failed to fetch weather data: {response.status_code}")
         
     @task()
-    def transform_weather_data(weather_data):
+    def transform_weather_data(stock_data):
         """Transform the extracted weather data."""
-        current_weather = weather_data['current_weather']
-        transformed_data = {
-            'latitude': LATITUDE,
-            'longitude': LONGITUDE,
-            'temperature': current_weather['temperature'],
-            'windspeed': current_weather['windspeed'],
-            'winddirection': current_weather['winddirection'],
-            'weathercode': current_weather['weathercode']
-        }
-        return transformed_data
+        print(stock_data["Time Series (Daily)"]["2025-02-01"])
+        
+        return True
+    
+    run_query = SnowflakeOperator(
+        task_id="run_query",
+        snowflake_conn_id="snowflake_conn",
+        sql="SELECT * FROM RAW_POS.MENU LIMIT 10;",
+        dag=dags,  # Attach it to the DAG
+    )
     
     @task()
     def load_weather_data(transformed_data):
@@ -94,9 +94,10 @@ with DAG(dag_id='weather_etl_pipeline',
         cursor.close()
 
     ## DAG Worflow- ETL Pipeline
-    weather_data= extract_weather_data()
-    transformed_data=transform_weather_data(weather_data)
-    load_weather_data(transformed_data)
+    stock_data= extract_stock_data()
+    transformed_data=transform_weather_data(stock_data)
+    transformed_data >> run_query
+    # load_weather_data(transformed_data)
 
         
     
